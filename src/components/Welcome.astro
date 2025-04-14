@@ -1,0 +1,187 @@
+---
+// src/pages/index.astro
+---
+
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Location finder – AI Chat</title>
+  </head>
+  <body class="bg-gray-100 text-gray-900 min-h-screen p-6">
+    <main class="max-w-4xl mx-auto space-y-12">
+      <h1 class="text-3xl font-bold mb-4 text-center">🧠 AI Location Finder</h1>
+
+      <!-- Chat Form -->
+      <section class="bg-white p-6 rounded-xl shadow">
+        <form id="chat-form" class="space-y-4">
+          <input
+            type="text"
+            name="message"
+            placeholder="Ask about North India..."
+            class="w-full p-3 border border-gray-300 rounded-lg"
+            required
+          />
+          <button
+            type="submit"
+            class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+          >
+            Send
+          </button>
+        </form>
+      </section>
+
+      <!-- Chat Response Display -->
+      <section id="chat-output" class="space-y-8"></section>
+    </main>
+
+    <script>
+		const chatForm = document.getElementById('chat-form');
+		const chatOutput = document.getElementById('chat-output');
+	  
+		chatForm.addEventListener('submit', async (e) => {
+		  e.preventDefault();
+		  const message = e.target.message.value.trim();
+		  if (!message) return;
+	  
+		  chatOutput.innerHTML = '<p class="text-gray-500">Loading...</p>';
+	  
+		  try {
+			const res = await fetch('/api/chat', {
+			  method: 'POST',
+			  headers: { 'Content-Type': 'application/json' },
+			  body: JSON.stringify({ messages: [{ role: 'user', content: message }] }),
+			});
+	  
+			const data = await res.json();
+			chatOutput.innerHTML = renderChatResult(data);
+			enrichAllPlaces(data.data); // 🔥 Enrich all places here
+		  } catch (err) {
+			chatOutput.innerHTML = '<p class="text-red-600">Failed to fetch response.</p>';
+			console.error(err);
+		  }
+	  
+		  e.target.reset();
+		});
+	  
+		function renderChatResult(data) {
+		  if (!data || !data.data) return '<p class="text-gray-500">No results found.</p>';
+	  
+		  const mainInfo = `
+			<div class="bg-white p-6 rounded-xl shadow">
+			  <h2 class="text-2xl font-bold">${data.name}</h2>
+			  <h3 class="text-lg text-gray-600 mt-1">${data.subtitle}</h3>
+			  <p class="mt-4 text-gray-700">${data.summary}</p>
+			  <p class="mt-2 text-sm text-gray-500">${data.location.city}, ${data.location.region}, ${data.location.country}</p>
+			</div>
+		  `;
+	  
+		  const grouped = data.data.reduce((acc, item) => {
+			if (!acc[item.group_name]) acc[item.group_name] = [];
+			acc[item.group_name].push(item);
+			return acc;
+		  }, {});
+	  
+		  let cardIdCounter = 0;
+	  
+		  const groupsHtml = Object.entries(grouped)
+			.map(([groupName, places]) => {
+			  const placeCards = places.map((place) => {
+				const id = `place-card-${cardIdCounter++}`;
+				place.__cardId = id; // Store for enrichment
+				return `
+				  <div id="${id}" class="bg-white p-4 rounded-lg shadow border border-gray-100 relative">
+					<h4 class="text-lg font-semibold">${place.name}</h4>
+					<p class="text-gray-700 text-sm mt-1">${place.description}</p>
+					<p class="text-xs text-gray-500 mt-2">${place.address}</p>
+					<div class="text-gray-400 text-sm mt-2 italic">Loading details...</div>
+				  </div>
+				`;
+			  }).join('');
+	  
+			  return `
+				<div>
+				  <h3 class="text-xl font-semibold mt-6 mb-4">${groupName}</h3>
+				  <div class="grid md:grid-cols-2 gap-4">${placeCards}</div>
+				</div>
+			  `;
+			}).join('');
+	  
+		  return `${mainInfo}<div>${groupsHtml}</div>`;
+		}
+	  
+		async function enrichAllPlaces(places) {
+		  for (const place of places) {
+			enrichPlace(place);
+		  }
+		}
+	
+			async function enrichPlace(place) {
+			const card = document.getElementById(place.__cardId);
+			if (!card) return;
+
+			try {
+				const res = await fetch('/api/places', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						name: place.name,
+						lat: place.lat,
+						lng: place.lng,
+					}),
+				});
+
+				if (!res.ok) {
+					let errorMessage = `Error ${res.status}`;
+					try {
+						const errorData = await res.json();
+						errorMessage = errorData?.error || errorMessage;
+					} catch {}
+					console.warn(`Skipping ${place.name} due to error:`, errorMessage);
+					// Remove loading indicator even on failure
+					card.querySelector('.italic')?.remove();
+					return;
+				}
+
+				const result = await res.json();
+				const info = result?.data?.result?.results;
+
+				if (!info) {
+					card.querySelector('.italic')?.remove();
+					return;
+				}
+
+				const mapLink = `${result?.data?.result?.url}`;
+
+				const extra = `
+					<div class="mt-4 border-t pt-3 space-y-2">
+						${info.thumbnail ? `
+							<img 
+								src="${info.thumbnail}" 
+								alt="${info.title}" 
+								class="rounded-lg mb-2" 
+								onerror="this.style.display='none'" 
+							/>
+						` : ''}
+						<p class="text-sm text-gray-700">${info.description || info.editorial_summary?.overview || ''}</p>
+						${info.rating ? `<p class="text-sm text-yellow-600">⭐ ${info.rating} (${info.reviews || info.user_ratings_total} reviews)</p>` : ''}
+						${info.website ? `<a href="${info.website}" target="_blank" class="text-blue-600 underline text-sm block">Official Website</a>` : ''}
+						${info.phone ? `<p class="text-sm text-gray-600">📞 ${info.phone}</p>` : ''}
+						${info.open_state ? `<p class="text-sm text-gray-600">🕒 ${info.open_state}</p>` : ''}
+						<a href="${mapLink}" target="_blank" class="text-sm text-blue-500 underline">📍 Open in Google Maps</a>
+					</div>
+				`;
+
+				card.querySelector('.italic')?.remove();
+				card.innerHTML += extra;
+			} catch (e) {
+				console.error(`Failed to enrich ${place.name}:`, e);
+				// Always remove loading indicator even if there's an error
+				card.querySelector('.italic')?.remove();
+			}
+		}
+
+
+	  </script>
+	  
+  </body>
+</html>
